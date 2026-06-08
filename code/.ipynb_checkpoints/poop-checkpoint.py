@@ -1,29 +1,34 @@
+
+
+
+
+#________
+
 import importlib
 import re
 import numpy as np
 import pandas as pd
 
-# dynamically importing setup so we can use all the variables and dfs from it
+
+
 setup = importlib.import_module("00_setup")
 
-# pulling everything into the global namespace, same as doing import *
+
 globals().update(vars(setup))
 
-# threshold for what counts as hate speech, and minimum comments a group needs to be included in analysis
+
 HATE_THRESHOLD = 0.5
 MIN_COMMENTS_PER_TARGET = 50
 
-# filtering comments df to only hate speech, using our threshold
+
 analysis = comments[comments["hate_speech_score"] > HATE_THRESHOLD].copy()
 
 print("Comment-target rows in analysis:", len(analysis))
 print("Unique comments in analysis:", analysis["comment_id"].nunique())
 
-# same filter but on target_long, which is our comment x target pair df
 hate = target_long[target_long["hate_speech_score"] > HATE_THRESHOLD].copy()
 
-# grouping by target group and computing summary stats for each
-# n_comments is unique comments (not rows) to avoid double-counting
+
 summary = (
     hate.groupby("target_clean")
     .agg(
@@ -37,26 +42,23 @@ summary = (
     .reset_index()
 )
 
-# dropping groups with too few comments so our estimates aren't unreliable
 summary = summary[summary["n_comments"] >= MIN_COMMENTS_PER_TARGET].copy()
 summary = summary.sort_values("n_comments", ascending=False)
 
-# correlation matrix between hate speech score and the vader sentiment columns
+
 corr = comments[["hate_speech_score", "vader_compound", "vader_neg", "vader_pos"]].corr()
 
-# random sample of 5000 comments for scatter plots (avoids overplotting on the full dataset)
+
 sample = comments.sample(min(5000, len(comments)), random_state=42)
 
-# checks whether a term appears in a text series using whole-word/whole-phrase matching
-# the lookahead and lookbehind prevent partial matches (e.g. "illegal" won't match "illegally")
+
 def contains_term(text_series, term):
     """Case-insensitive whole-word/whole-phrase matching."""
     term = str(term).strip().lower()
     pattern = r"(?<!\w)" + re.escape(term) + r"(?!\w)"
     return text_series.fillna("").str.lower().str.contains(pattern, regex=True, na=False)
 
-# for a list of terms, returns how often each appears per 1,000 comments for each target group
-# normalizing by group size so we can compare across groups of different sizes
+
 def word_rate_table(data, terms, min_comments=50):
     """
     Returns mentions per 1,000 comments by target group.
@@ -76,7 +78,7 @@ def word_rate_table(data, terms, min_comments=50):
     out = out[out["n_comments"] >= min_comments]
     return out.sort_values("n_comments", ascending=False)
 
-# the specific phrases we want to look at across target groups
+
 WORDS_TO_SEARCH = [
     "go back",
     "illegal",
@@ -87,10 +89,9 @@ WORDS_TO_SEARCH = [
     "disease"
 ]
 
-# running the word rate table on our hate speech subset
 word_rates = word_rate_table(hate, WORDS_TO_SEARCH, min_comments=MIN_COMMENTS_PER_TARGET)
 
-# stopwords to exclude from word frequency analysis - common english words that don't carry meaning
+
 STOPWORDS = set("""
 a an and are as at be been being but by can could did do does doing for from had has have having he her hers
 him his i if in into is it its itself just me my of on or our ours she so than that the their theirs them they
@@ -100,25 +101,19 @@ not now off once only other out over own same should some such then there these 
 would
 """.split())
 
-# lowercases text and extracts words of 3+ characters, filtering out stopwords and urls
 def tokenize(text):
     text = str(text).lower()
     words = re.findall(r"[a-z']{3,}", text)
     return [w for w in words if w not in STOPWORDS and not w.startswith("http")]
 
-# returns the n most common words in comments targeting a specific group
 def top_words_for_target(data, target_name, n=25):
     subset = data[data["target_clean"].eq(target_name)]
     tokens = subset["text"].apply(tokenize).explode().dropna()
     return tokens.value_counts().head(n).rename_axis("word").reset_index(name="count")
 
-# picking a specific target group to inspect by position in the summary df
 TARGET_TO_INSPECT = summary.iloc[38]["target_clean"]
 print("Inspecting:", TARGET_TO_INSPECT)
 
-# compares word usage in comments targeting a focal group vs all other comments
-# uses log2 rate ratio with laplace smoothing so rare words don't dominate
-# positive values mean a word is more distinctive to the focal group
 def distinctive_words(data, target_name, min_count=10, n=25):
     target_texts = data.loc[data["target_clean"].eq(target_name), "text"]
     other_texts = data.loc[~data["target_clean"].eq(target_name), "text"]
@@ -140,12 +135,10 @@ def distinctive_words(data, target_name, min_count=10, n=25):
     other_total = table["other_count"].sum()
     vocab_size = len(table)
 
-    # add-1 smoothing over vocab size so words that never appear in one group don't get -inf
     table["target_rate"] = (table["target_count"] + 1) / (target_total + vocab_size)
     table["other_rate"] = (table["other_count"] + 1) / (other_total + vocab_size)
     table["log2_rate_ratio"] = np.log2(table["target_rate"] / table["other_rate"])
 
-    # only keeping words that appear enough times in the focal group to be meaningful
     table = table[table["target_count"] >= min_count]
     return (
         table.sort_values("log2_rate_ratio", ascending=False)
@@ -154,7 +147,7 @@ def distinctive_words(data, target_name, min_count=10, n=25):
              .rename(columns={"index": "word"})
     )
 
-# same groupby as summary but at the broader family level (e.g. Race, Gender) instead of specific subgroups
+
 family_summary = (
     hate.groupby("target_family")
     .agg(
@@ -166,7 +159,7 @@ family_summary = (
     .sort_values("n_comments", ascending=False)
 )
 
-# finding comments that target more than one group, for co-occurrence analysis
+
 multi_target_comment_ids = target_long["comment_id"].value_counts()
 multi_target_comment_ids = multi_target_comment_ids[multi_target_comment_ids > 1].index
 
@@ -175,11 +168,8 @@ multi_target_df = target_long[target_long["comment_id"].isin(multi_target_commen
 print(f"Number of comments targeting multiple groups: {len(multi_target_comment_ids)}")
 print(f"Total entries in multi_target_df: {len(multi_target_df)}")
 
-# getting the list of target groups for each multi-target comment
 targets_per_comment = multi_target_df.groupby("comment_id")["target_clean"].apply(list)
 
-# enumerating all pairwise combinations of target groups within each comment
-# sorting before pairing ensures consistent ordering (A,B not sometimes B,A)
 all_pairs = []
 for targets_list in targets_per_comment:
     sorted_targets = sorted(targets_list)
@@ -187,7 +177,6 @@ for targets_list in targets_per_comment:
         for j in range(i + 1, len(sorted_targets)):
             all_pairs.append((sorted_targets[i], sorted_targets[j]))
 
-# counting how often each pair of groups appears together
 if all_pairs:
     co_occurrence_temp_df = pd.DataFrame(all_pairs, columns=["target_1", "target_2"])
     co_occurrence_df = co_occurrence_temp_df.groupby(["target_1", "target_2"]).size().reset_index(name="count")
@@ -196,8 +185,6 @@ else:
 
 co_occurrence_df = co_occurrence_df.sort_values("count", ascending=False).reset_index(drop=True)
 
-# for a given group, this returns the top n groups it is most frequently co-targeted with
-#this checks both columns since pairs are stored with sorted order (target_1 < target_2 alphabetically)
 def get_co_targeted_groups(co_occurrence_df, main_target, n=10):
     filtered_df = co_occurrence_df[
         (co_occurrence_df["target_1"] == main_target) |
@@ -212,7 +199,7 @@ def get_co_targeted_groups(co_occurrence_df, main_target, n=10):
     result = filtered_df.groupby("other_target")["count"].sum().sort_values(ascending=False)
     return result.head(n)
 
-# splitting comments into those targeting only one group vs multiple groups
+
 target_counts_per_comment = target_long.groupby("comment_id")["target_clean"].nunique()
 
 single_target_comment_ids = target_counts_per_comment[target_counts_per_comment == 1].index
@@ -224,16 +211,11 @@ single_targeted_counts = single_targeted_df["target_clean"].value_counts()
 multi_targeted_df = target_long[target_long["comment_id"].isin(multi_target_comment_ids_v2)]
 multi_targeted_counts = multi_targeted_df["target_clean"].value_counts()
 
-#combining into one summary df so we can compare targeted-alone vs co-targeted counts per group
 targeting_summary = pd.DataFrame({
     "targeted_alone": single_targeted_counts,
     "co_targeted": multi_targeted_counts
 }).fillna(0).astype(int)
 
 targeting_summary["total_mentions"] = targeting_summary["targeted_alone"] + targeting_summary["co_targeted"]
-# proportion co-targeted tells us how often a group appears alongside another group vs on its own
 targeting_summary["proportion_co_targeted"] = targeting_summary["co_targeted"] / targeting_summary["total_mentions"]
 targeting_summary = targeting_summary.sort_values("total_mentions", ascending=False)
-
-
-
